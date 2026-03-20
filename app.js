@@ -5,7 +5,6 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
-const clickQueue = require('./queue');
 require('dotenv').config();
 
 const app = express();
@@ -15,7 +14,7 @@ app.use(express.json());
 // Serve static files (dashboard.html, etc.)
 app.use(express.static('.'));
 
-// PostgreSQL connection
+// PostgreSQL connection pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -327,7 +326,6 @@ app.get('/api/stats/bot-ratio', authenticateToken, async (req, res) => {
   }
 });
 
-// ---------- TOP LINKS FOR TODAY ----------
 app.get('/api/stats/top-links/today', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -353,7 +351,6 @@ app.get('/api/stats/top-links/today', authenticateToken, async (req, res) => {
   }
 });
 
-// ---------- TOP LINKS FOR YESTERDAY ----------
 app.get('/api/stats/top-links/yesterday', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -379,7 +376,7 @@ app.get('/api/stats/top-links/yesterday', authenticateToken, async (req, res) =>
   }
 });
 
-// ---------- REDIRECT ENDPOINT ----------
+// ---------- REDIRECT ENDPOINT (direct insert, no queue) ----------
 app.get('/:alias', async (req, res) => {
   const { alias } = req.params;
   const host = req.get('host');
@@ -399,14 +396,12 @@ app.get('/:alias', async (req, res) => {
 
     const clickId = uuidv4();
 
-    await clickQueue.add({
-      clickId,
-      linkId: link.id,
-      ip: req.ip,
-      userAgent: req.get('User-Agent'),
-      referer: req.get('Referer'),
-      timestamp: new Date().toISOString(),
-    });
+    // Direct insert – no Redis queue
+    await pool.query(
+      `INSERT INTO clicks (click_id, link_id, ip, user_agent, referer, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [clickId, link.id, req.ip, req.get('User-Agent'), req.get('Referer'), new Date().toISOString()]
+    );
 
     res.redirect(302, link.destination_url);
   } catch (err) {
@@ -429,7 +424,7 @@ app.get('/', (req, res) => {
   res.send('Link Analytics API is running!');
 });
 
-// ---------- START SERVER (HTTP) ----------
+// ---------- START SERVER ----------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
