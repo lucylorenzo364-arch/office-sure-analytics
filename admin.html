@@ -22,8 +22,7 @@
         <h1 class="text-3xl font-bold mb-2">🔧 Admin Panel</h1>
         <p class="text-gray-400 mb-6">Manage users, roles, and view global stats</p>
 
-        <!-- Login prompt (same as dashboard) -->
-        <div id="loginPrompt" class="glass-card text-center hidden">
+        <div id="loginPrompt" class="glass-card text-center">
             <p class="mb-4">Enter your JWT token (admin only):</p>
             <div class="flex flex-col sm:flex-row gap-3 justify-center">
                 <input type="text" id="tokenInput" class="bg-gray-800 border border-gray-700 rounded-xl px-4 py-2 w-full sm:w-96 text-white" placeholder="eyJhbGci...">
@@ -38,7 +37,7 @@
                 <div class="overflow-x-auto">
                     <table id="usersTable">
                         <thead>
-                            <tr><th>ID</th><th>Email</th><th>Role</th><th>Links</th><th>Clicks</th><th>Action</th></tr>
+                            <tr><th>ID</th><th>Email</th><th>Role</th><th>Links</th><th>Clicks</th></tr>
                         </thead>
                         <tbody></tbody>
                     </table>
@@ -59,16 +58,8 @@
     </div>
 
     <script>
-        let token = localStorage.getItem('adminToken');
-        if (token) {
-            document.getElementById('tokenInput').value = token;
-            loadAdminPanel();
-        } else {
-            document.getElementById('loginPrompt').classList.remove('hidden');
-        }
-
         async function loadAdminPanel() {
-            token = document.getElementById('tokenInput').value.trim();
+            const token = document.getElementById('tokenInput').value.trim();
             if (!token) return alert('Token required');
             localStorage.setItem('adminToken', token);
 
@@ -77,26 +68,28 @@
                 const statsRes = await fetch('/api/admin/stats', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-                if (!statsRes.ok) throw new Error('Not authorized or error');
+                if (!statsRes.ok) throw new Error('Failed to fetch stats');
                 const stats = await statsRes.json();
 
                 // Fetch users
                 const usersRes = await fetch('/api/admin/users', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+                if (!usersRes.ok) throw new Error('Failed to fetch users');
                 const users = await usersRes.json();
 
                 // Fetch domains
                 const domainsRes = await fetch('/api/admin/domains', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
+                if (!domainsRes.ok) throw new Error('Failed to fetch domains');
                 const domains = await domainsRes.json();
 
-                // Hide login prompt, show content
+                // Hide login, show content
                 document.getElementById('loginPrompt').classList.add('hidden');
                 document.getElementById('adminContent').classList.remove('hidden');
 
-                // Render global stats
+                // Render stats
                 document.getElementById('globalStats').innerHTML = `
                     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                         <div><p class="text-sm text-gray-400">Total Users</p><p class="text-2xl font-bold text-white">${stats.totalUsers}</p></div>
@@ -107,10 +100,10 @@
                 `;
 
                 // Render users table
-                const tbody = document.querySelector('#usersTable tbody');
-                tbody.innerHTML = '';
-                for (const user of users) {
-                    const row = tbody.insertRow();
+                const userTbody = document.querySelector('#usersTable tbody');
+                userTbody.innerHTML = '';
+                users.forEach(user => {
+                    const row = userTbody.insertRow();
                     row.insertCell(0).innerText = user.id;
                     row.insertCell(1).innerText = user.email;
                     const roleCell = row.insertCell(2);
@@ -130,24 +123,29 @@
                     roleCell.appendChild(select);
                     row.insertCell(3).innerText = user.link_count || 0;
                     row.insertCell(4).innerText = user.total_clicks || 0;
-                    // optional action column (you can add buttons later)
-                }
+                });
 
                 // Render domains table
-                const dbody = document.querySelector('#domainsTable tbody');
-                dbody.innerHTML = '';
-                for (const dom of domains) {
-                    const row = dbody.insertRow();
+                const domainTbody = document.querySelector('#domainsTable tbody');
+                domainTbody.innerHTML = '';
+                domains.forEach(dom => {
+                    const row = domainTbody.insertRow();
                     row.insertCell(0).innerText = dom.id;
                     row.insertCell(1).innerText = dom.domain;
                     row.insertCell(2).innerText = dom.owner_email || '—';
                     row.insertCell(3).innerText = new Date(dom.created_at).toLocaleString();
-                }
-
+                });
             } catch (err) {
                 alert('Failed to load admin data. Check token or permissions.');
                 console.error(err);
             }
+        }
+
+        // Auto‑load if token already in localStorage
+        const storedToken = localStorage.getItem('adminToken');
+        if (storedToken) {
+            document.getElementById('tokenInput').value = storedToken;
+            loadAdminPanel();
         }
     </script>
 </body>
