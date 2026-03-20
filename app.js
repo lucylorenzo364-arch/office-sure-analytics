@@ -4,17 +4,16 @@ const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const path = require('path');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Serve static files (dashboard.html, etc.)
+// Serve static files (dashboard.html, admin.html, etc.)
 app.use(express.static('.'));
 
-// PostgreSQL connection pool
+// PostgreSQL connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -30,7 +29,7 @@ app.set('db', pool);
 // ---------- Helper: generate JWT ----------
 const generateToken = (user) => {
   return jwt.sign(
-    { id: user.id, email: user.email },
+    { id: user.id, email: user.email, role: user.role },
     process.env.JWT_SECRET,
     { expiresIn: '7d' }
   );
@@ -49,6 +48,14 @@ function authenticateToken(req, res, next) {
   });
 }
 
+// ---------- Middleware: isAdmin ----------
+function isAdmin(req, res, next) {
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
 // ---------- AUTH ROUTES ----------
 app.post('/api/signup', async (req, res) => {
   const { email, password } = req.body;
@@ -60,12 +67,12 @@ app.post('/api/signup', async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const result = await pool.query(
-      'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
-      [email, hashedPassword]
+      'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) RETURNING id, email, role',
+      [email, hashedPassword, 'user']
     );
     const user = result.rows[0];
     const token = generateToken(user);
-    res.status(201).json({ token, user });
+    res.status(201).json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -85,7 +92,7 @@ app.post('/api/login', async (req, res) => {
     if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
 
     const token = generateToken(user);
-    res.json({ token, user: { id: user.id, email: user.email } });
+    res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
@@ -376,7 +383,81 @@ app.get('/api/stats/top-links/yesterday', authenticateToken, async (req, res) =>
   }
 });
 
-// ---------- REDIRECT ENDPOINT (direct insert, no queue) ----------
+// ---------- ADMIN ROUTES ----------
+app.get('/api/admin/users', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.email, u.role, u.created_at,
+             COUNT(DISTINCT l.id) AS link_count,
+             COUNT(c.id) AS total_clicks
+      FROM users u
+      LEFT JOIN links l ON l.user_id = u.id
+      LEFT JOIN clicks c ON c.link_id = l.id
+      GROUP BY u.id
+      ORDER BY u.id
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.put('/api/admin/users/:id/role', authenticateToken, isAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { role } = req.body;
+  if (!['user', 'admin'].includes(role)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, email, role',
+      [role, id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/stats', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const totalUsers = await pool.query('SELECT COUNT(*) FROM users');
+    const totalLinks = await pool.query('SELECT COUNT(*) FROM links');
+    const totalClicks = await pool.query('SELECT COUNT(*) FROM clicks');
+    const totalDomains = await pool.query('SELECT COUNT(*) FROM domains');
+    res.json({
+      totalUsers: parseInt(totalUsers.rows[0].count),
+      totalLinks: parseInt(totalLinks.rows[0].count),
+      totalClicks: parseInt(totalClicks.rows[0].count),
+      totalDomains: parseInt(totalDomains.rows[0].count),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/domains', authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT d.*, u.email AS owner_email
+      FROM domains d
+      LEFT JOIN users u ON d.user_id = u.id
+      ORDER BY d.id
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ---------- REDIRECT ENDPOINT (direct insert) ----------
 app.get('/:alias', async (req, res) => {
   const { alias } = req.params;
   const host = req.get('host');
@@ -396,7 +477,7 @@ app.get('/:alias', async (req, res) => {
 
     const clickId = uuidv4();
 
-    // Direct insert – no Redis queue
+    // Direct insert – no queue
     await pool.query(
       `INSERT INTO clicks (click_id, link_id, ip, user_agent, referer, timestamp)
        VALUES ($1, $2, $3, $4, $5, $6)`,

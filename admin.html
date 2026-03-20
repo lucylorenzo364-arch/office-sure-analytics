@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #0a0a0a; color: #f0f0f0; font-family: 'Inter', sans-serif; }
+        .glass-card { background: rgba(20,20,20,0.9); backdrop-filter: blur(2px); border: 1px solid rgba(255,80,80,0.2); border-radius: 1rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .glass-card:hover { transform: translateY(-2px); box-shadow: 0 20px 25px -12px rgba(255,0,0,0.15); }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #333; }
+        th { color: #aaa; font-weight: 600; text-transform: uppercase; font-size: 0.75rem; }
+        button { background: #e53e3e; padding: 0.5rem 1rem; border-radius: 0.5rem; transition: all 0.2s; }
+        button:hover { background: #c53030; transform: scale(1.02); }
+        select { background: #2d2d2d; color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+    </style>
+</head>
+<body class="p-6">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-3xl font-bold mb-2">🔧 Admin Panel</h1>
+        <p class="text-gray-400 mb-6">Manage users, roles, and view global stats</p>
+
+        <!-- Login prompt (same as dashboard) -->
+        <div id="loginPrompt" class="glass-card text-center hidden">
+            <p class="mb-4">Enter your JWT token (admin only):</p>
+            <div class="flex flex-col sm:flex-row gap-3 justify-center">
+                <input type="text" id="tokenInput" class="bg-gray-800 border border-gray-700 rounded-xl px-4 py-2 w-full sm:w-96 text-white" placeholder="eyJhbGci...">
+                <button onclick="loadAdminPanel()" class="bg-red-600 hover:bg-red-700">Load Admin Panel</button>
+            </div>
+        </div>
+
+        <div id="adminContent" class="hidden">
+            <div class="glass-card" id="globalStats"></div>
+            <div class="glass-card">
+                <h2 class="text-xl font-bold mb-4">👥 Users</h2>
+                <div class="overflow-x-auto">
+                    <table id="usersTable">
+                        <thead>
+                            <tr><th>ID</th><th>Email</th><th>Role</th><th>Links</th><th>Clicks</th><th>Action</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="glass-card">
+                <h2 class="text-xl font-bold mb-4">🌍 All Domains</h2>
+                <div class="overflow-x-auto">
+                    <table id="domainsTable">
+                        <thead>
+                            <tr><th>ID</th><th>Domain</th><th>Owner</th><th>Created</th></tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let token = localStorage.getItem('adminToken');
+        if (token) {
+            document.getElementById('tokenInput').value = token;
+            loadAdminPanel();
+        } else {
+            document.getElementById('loginPrompt').classList.remove('hidden');
+        }
+
+        async function loadAdminPanel() {
+            token = document.getElementById('tokenInput').value.trim();
+            if (!token) return alert('Token required');
+            localStorage.setItem('adminToken', token);
+
+            try {
+                // Fetch global stats
+                const statsRes = await fetch('/api/admin/stats', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!statsRes.ok) throw new Error('Not authorized or error');
+                const stats = await statsRes.json();
+
+                // Fetch users
+                const usersRes = await fetch('/api/admin/users', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const users = await usersRes.json();
+
+                // Fetch domains
+                const domainsRes = await fetch('/api/admin/domains', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                const domains = await domainsRes.json();
+
+                // Hide login prompt, show content
+                document.getElementById('loginPrompt').classList.add('hidden');
+                document.getElementById('adminContent').classList.remove('hidden');
+
+                // Render global stats
+                document.getElementById('globalStats').innerHTML = `
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                        <div><p class="text-sm text-gray-400">Total Users</p><p class="text-2xl font-bold text-white">${stats.totalUsers}</p></div>
+                        <div><p class="text-sm text-gray-400">Total Links</p><p class="text-2xl font-bold text-white">${stats.totalLinks}</p></div>
+                        <div><p class="text-sm text-gray-400">Total Clicks</p><p class="text-2xl font-bold text-white">${stats.totalClicks}</p></div>
+                        <div><p class="text-sm text-gray-400">Total Domains</p><p class="text-2xl font-bold text-white">${stats.totalDomains}</p></div>
+                    </div>
+                `;
+
+                // Render users table
+                const tbody = document.querySelector('#usersTable tbody');
+                tbody.innerHTML = '';
+                for (const user of users) {
+                    const row = tbody.insertRow();
+                    row.insertCell(0).innerText = user.id;
+                    row.insertCell(1).innerText = user.email;
+                    const roleCell = row.insertCell(2);
+                    const select = document.createElement('select');
+                    select.innerHTML = `<option value="user" ${user.role === 'user' ? 'selected' : ''}>user</option>
+                                        <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>admin</option>`;
+                    select.onchange = async () => {
+                        const newRole = select.value;
+                        const res = await fetch(`/api/admin/users/${user.id}/role`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                            body: JSON.stringify({ role: newRole })
+                        });
+                        if (res.ok) alert('Role updated');
+                        else alert('Failed to update role');
+                    };
+                    roleCell.appendChild(select);
+                    row.insertCell(3).innerText = user.link_count || 0;
+                    row.insertCell(4).innerText = user.total_clicks || 0;
+                    // optional action column (you can add buttons later)
+                }
+
+                // Render domains table
+                const dbody = document.querySelector('#domainsTable tbody');
+                dbody.innerHTML = '';
+                for (const dom of domains) {
+                    const row = dbody.insertRow();
+                    row.insertCell(0).innerText = dom.id;
+                    row.insertCell(1).innerText = dom.domain;
+                    row.insertCell(2).innerText = dom.owner_email || '—';
+                    row.insertCell(3).innerText = new Date(dom.created_at).toLocaleString();
+                }
+
+            } catch (err) {
+                alert('Failed to load admin data. Check token or permissions.');
+                console.error(err);
+            }
+        }
+    </script>
+</body>
+</html>
